@@ -18,66 +18,107 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-import minecraft
-import block
 import time
 
+import minecraft
+import block
+
+
+class LifeGrid(object):
+    """Helper class to handle the grid that the game of life is played on"""
+
+    def __init__(self, size=32):
+        self.size = size
+        # The grid is represented as a single list.  You can imagine this as
+        # taking every row and concatenating them together.
+        self.grid = [0] * (self.size**2)
+
+    def neighbors(self, x, y):
+        """Get the number of neighbors that surround the location x, y"""
+        count = 0
+        # Note: the min and max functions are to prevent looking for
+        # neighbors beyond the grid boundaries.
+        for x1 in range(max(x - 1, 0), min(x + 2, self.size)):
+            for y1 in range(max(y - 1, 0), min(y + 2, self.size)):
+                if x1 == x and y1 == y:
+                    # Don't count the original x, y.
+                    continue
+                if self.grid[x1 * self.size + y1]:
+                    count += 1
+        return count
+
+    def get(self, x, y):
+        """Returns the brick number at location x, y."""
+        return self.grid[x * self.size + y]
+
+    def set(self, x, y, val):
+        """Set the brick number at location x, y."""
+        self.grid[x * self.size + y] = val
+
+
 class PiLife(object):
-    def __init__(self):
-        self.mc = minecraft.Minecraft.create('127.0.0.1')
+    """Conway's game of life in Minecraft"""
+
+    def __init__(self, size=32):
+        """Initialize Life"""
+        # Set up the minecraft connection
+        self.conn = minecraft.Minecraft.create('127.0.0.1')
+        self.size = size
+        self.grid = LifeGrid(size)
 
     def create_board(self):
-        pos = self.mc.player.getTilePos()
-        self.size = 32
+        """Create the board centered around the player's current position"""
+        pos = self.conn.player.getTilePos()
         self.x = pos.x-self.size/2
         self.y = pos.y
         self.z = pos.z-self.size/2
-        # create the board
-        self.mc.setBlocks(self.x, self.y-1, self.z, self.x+self.size-1, self.y-1,
-                self.z+self.size-1, block.OBSIDIAN)
-        # clear the area above a bit just to be sure
-        self.mc.setBlocks(self.x, self.y, self.z, self.x+self.size-1, self.y+10,
-                self.z+self.size-1, block.AIR)
+        # Create the board
+        self.conn.setBlocks(self.x, self.y - 1, self.z, self.x + self.size - 1,
+                            self.y - 1, self.z + self.size - 1, block.OBSIDIAN)
+        # Clear the area above a bit just to be sure
+        self.conn.setBlocks(self.x, self.y, self.z, self.x + self.size - 1,
+                            self.y + 20, self.z + self.size - 1, block.AIR)
 
-    def run(self):
-        self.mc.postToChat("Gathering blocks")
-        grid = []
-        for x in range(self.size):
-            for z in range(self.size):
-                grid.append(self.mc.getBlock(self.x+x, self.y, self.z+z))
-        self.grid = grid
-        self.mc.postToChat("Running simulation...")
-        rev = 1
-        while True:
-            new_grid = self.step()
-            for x in range(self.size):
-                for z in range(self.size):
-                    if new_grid[self.size*x+z] != self.grid[self.size*x+z]:
-                        self.mc.setBlock(self.x+x, self.y, self.z+z,
-                                new_grid[self.size*x+z])
-            self.grid = new_grid
-            rev += 1
-
-    def step(self):
-        def neighbors(x, z):
-            count = 0
-            for x1 in range(max(x-1, 0), min(x+2, self.size)):
-                for z1 in range(max(z-1, 0), min(z+2, self.size)):
-                    if x1 == x and z1 == z:
-                        continue
-                    if self.grid[x1*self.size+z1]:
-                        count += 1
-            return count
-
-        new_grid = []
-        for x in range(self.size):
-            for z in range(self.size):
-                count = neighbors(x, z)
-                if self.grid[x*self.size+z] == 0 and count == 3:
-                    new_grid.append(4)
-                elif self.grid[x*self.size+z] and (count < 2 or count > 3):
-                    new_grid.append(0)
+    def step(self, grid):
+        """Calculate the next generation.  Returns the next generation grid"""
+        new_grid = LifeGrid(grid.size)
+        for x in range(grid.size):
+            for y in range(grid.size):
+                count = grid.neighbors(x, y)
+                block = grid.get(x, y)
+                if block == 0 and count == 3:
+                    # If a cell is empty and has 3 neighbors,
+                    # a new block is born
+                    new_grid.set(x, y, 4)
+                elif block != 0 and (count < 2 or count > 3):
+                    # If a cell has a block, and has less than 2 or
+                    # greater than 3 neighbors, remove the block
+                    new_grid.set(x, y, 0)
                 else:
-                    new_grid.append(self.grid[x*self.size+z])
+                    # Otherwise, leave the block as is
+                    new_grid.set(x, y, grid.get(x, y))
         return new_grid
 
+    def run(self):
+        self.conn.postToChat("Gathering blocks")
+        # Note: There currently isn't a bulk get blocks opperation, so for
+        # now, we have to loop over the entire grid, getting each block
+        # one at a time.
+        for x in range(self.size):
+            for z in range(self.size):
+                self.grid.set(x, z, self.conn.getBlock(
+                    self.x + x, self.y, self.z + z))
+        self.conn.postToChat("Running simulation")
+        print "Starting similation, hit CTRL-C to stop"
+        try:
+            while True:
+                new_grid = self.step(self.grid)
+                for x in range(self.size):
+                    for z in range(self.size):
+                        if (new_grid.get(x, z) != self.grid.get(x, z)):
+                            # Only update if things have changed
+                            self.conn.setBlock(self.x + x, self.y, self.z + z,
+                                               new_grid.get(x, z))
+                self.grid = new_grid
+        except KeyboardInterrupt:
+            self.conn.postToChat("Stopping simulation")
